@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tuichat"
+version = "0.1.0"
+description = "A full-screen terminal chat client for local (Ollama) and cloud (OpenAI-compatible) language models."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["prompt_toolkit>=3.0"]
+
+[project.optional-dependencies]
+ollama = ["ollama>=0.4"]
+openai = ["openai>=1.0"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+tuichat = "tuichat.cli:main"
+
+[tool.setuptools]
+packages = ["tuichat"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
