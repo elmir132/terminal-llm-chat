@@ -214,3 +214,71 @@ def test_full_application_loop_with_keystrokes():
 
     chat = run(scenario)
     assert "hello there" in chat.last_ai_msg
+
+
+# ---- stopping a reply (Ctrl+C) ---------------------------------------------------------------
+
+class SlowBackend(Backend):
+    name = "slow"
+
+    def __init__(self):
+        super().__init__("m")
+
+    async def stream(self, messages):
+        yield "part one "
+        await asyncio.sleep(10)
+        yield "never shown"
+
+
+def test_stop_keeps_the_partial_reply_and_drops_the_queue():
+    async def scenario(pipe):
+        chat = make(SlowBackend(), pipe)
+        chat.submit("first")
+        await asyncio.sleep(0.05)
+        chat.submit("second")
+        chat.submit("third")
+        assert chat.stop() is True
+        await settle(chat)
+        return chat
+
+    chat = run(scenario)
+    assert "part one" in chat.output_area.text and "never shown" not in chat.output_area.text
+    assert "⏹ Stopped (2 queued messages dropped)" in chat.output_area.text
+    assert [m["role"] for m in chat.messages] == ["user", "assistant"]
+    assert chat.messages[-1]["content"].strip() == "part one"
+    assert chat.queue == [] and not chat.streaming
+
+
+def test_stop_before_any_text_removes_the_unanswered_question():
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(gate=asyncio.Event()), pipe)
+        chat.submit("hello")
+        await asyncio.sleep(0.05)
+        chat.stop()
+        await settle(chat)
+        return chat
+
+    chat = run(scenario)
+    assert chat.messages == []
+    assert "⏹ Stopped" in chat.output_area.text and "dropped" not in chat.output_area.text
+
+
+def test_stop_when_idle_does_nothing_and_the_app_can_continue_afterwards():
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["fine"]), pipe)
+        assert chat.stop() is False
+        chat.submit("a")
+        await settle(chat)
+        chat.backend = SlowBackend()
+        chat.submit("b")
+        await asyncio.sleep(0.05)
+        chat.stop()
+        await settle(chat)
+        chat.backend = ScriptedBackend(["again"])
+        chat.submit("c")
+        await settle(chat)
+        return chat
+
+    chat = run(scenario)
+    assert chat.messages[-1] == {"role": "assistant", "content": "again"}
+    assert not chat.streaming

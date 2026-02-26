@@ -71,7 +71,7 @@ class ChatApp:
             VSplit([spacer(), self.output_area, spacer()]),
             rule(),
             VSplit([spacer(), Frame(self.input_area,
-                    title="Enter=send │ Tab=scroll │ ^A=copy all │ ^Y=copy reply │ ^C=exit",
+                    title="Enter=send │ Tab=scroll │ ^A=copy all │ ^Y=copy reply │ ^C=stop/exit",
                     style="class:input-frame"), spacer()]),
             Window(height=BOTTOM_PADDING, char=" "),
         ]), focused_element=self.input_area)
@@ -88,6 +88,11 @@ class ChatApp:
         kb = KeyBindings()
 
         @kb.add("c-c")
+        def _stop_or_exit(event):
+            # While a reply is streaming, Ctrl+C stops it; when idle it quits.
+            if not self.stop():
+                event.app.exit()
+
         @kb.add("c-d")
         def _exit(event):
             event.app.exit()
@@ -185,6 +190,15 @@ class ChatApp:
             self.append_output("\n")
 
     # ---- conversation -------------------------------------------------
+    def stop(self):
+        """Stop the reply that is streaming and drop the queued messages. False if nothing is running."""
+        if not self.streaming or self._task is None or self._task.done():
+            return False
+        self._dropped_on_stop = len(self.queue)
+        self.queue.clear()
+        self._task.cancel()
+        return True
+
     async def _drain(self):
         self.streaming = True
         try:
@@ -229,10 +243,28 @@ class ChatApp:
             self.last_ai_msg = reply
             self.messages.append({"role": "assistant", "content": reply})
             self.append_output("\n\n")
+        except asyncio.CancelledError:
+            self._stopped(reply)        # the user pressed Ctrl+C; do not re-raise, the queue is already empty
         except BackendError as exc:
             self._fail(str(exc))
         except Exception as exc:  # keep the UI alive whatever a backend raises
             self._fail(f"Unexpected error: {exc}")
+
+    def _stopped(self, reply):
+        self._stop_spinner()
+        if reply:
+            # Keep what was already shown, and in the history, so the next question has the context.
+            self.append_output("\n")
+            self.last_ai_msg = reply
+            self.messages.append({"role": "assistant", "content": reply})
+        else:
+            self.set_output(self._base)   # remove the spinner line
+            if self.messages and self.messages[-1]["role"] == "user":
+                self.messages.pop()       # nothing was answered: a retry should not be duplicated
+        dropped = getattr(self, "_dropped_on_stop", 0)
+        note = f" ({dropped} queued message{'s' if dropped != 1 else ''} dropped)" if dropped else ""
+        self.append_output(f"\n⏹ Stopped{note}\n\n")
+        self._dropped_on_stop = 0
 
     def _fail(self, message):
         self._stop_spinner()
