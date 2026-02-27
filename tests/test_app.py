@@ -282,3 +282,75 @@ def test_stop_when_idle_does_nothing_and_the_app_can_continue_afterwards():
     chat = run(scenario)
     assert chat.messages[-1] == {"role": "assistant", "content": "again"}
     assert not chat.streaming
+
+
+# ---- system prompt --------------------------------------------------------------------------------
+
+def test_the_system_prompt_is_sent_first_and_never_stored_in_the_history():
+    async def scenario(pipe):
+        backend = ScriptedBackend(["ok"])
+        chat = ChatApp(backend, input=pipe, output=DummyOutput(), columns=lambda: 80, system="Answer in French.")
+        chat.submit("hi")
+        await settle(chat)
+        return chat, backend
+
+    chat, backend = run(scenario)
+    assert backend.seen[0][0] == {"role": "system", "content": "Answer in French."}
+    assert backend.seen[0][1] == {"role": "user", "content": "hi"}
+    assert all(m["role"] != "system" for m in chat.messages)
+    assert "System prompt set (17 characters)" in chat.output_area.text
+
+
+def test_system_command_shows_sets_and_removes_the_prompt():
+    async def scenario(pipe):
+        backend = ScriptedBackend(["ok"])
+        chat = make(backend, pipe)
+        chat.submit("/system")
+        assert "No system prompt" in chat.output_area.text
+        chat.submit("/system You are a pirate.")
+        chat.submit("/system")
+        chat.submit("go")
+        await settle(chat)
+        chat.submit("/system off")
+        chat.submit("again")
+        await settle(chat)
+        return chat, backend
+
+    chat, backend = run(scenario)
+    assert "System prompt (17 characters):\nYou are a pirate." in chat.output_area.text
+    assert "System prompt removed" in chat.output_area.text
+    assert backend.seen[0][0] == {"role": "system", "content": "You are a pirate."}
+    assert backend.seen[1][0]["role"] == "user"                     # removed again
+
+
+def test_clear_keeps_the_system_prompt_and_an_overlong_one_is_refused():
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(), pipe)
+        chat.submit("/system Be brief.")
+        chat.submit("hi")
+        await settle(chat)
+        chat.submit("/clear")
+        chat.submit("/system " + "x" * 5000)
+        return chat
+
+    chat = run(scenario)
+    assert chat.system == "Be brief."
+    assert "limited to 4000 characters" in chat.output_area.text
+
+
+def test_cli_reads_the_system_prompt_from_text_or_file(tmp_path):
+    import pytest
+    from tuichat.cli import build_parser, resolve_system
+    parser = build_parser()
+    assert resolve_system(parser, parser.parse_args(["--system", "Hello"])) == "Hello"
+    f = tmp_path / "s.txt"
+    f.write_text("From file\n", encoding="utf-8")
+    assert resolve_system(parser, parser.parse_args(["--system-file", str(f)])) == "From file\n"
+    assert resolve_system(parser, parser.parse_args([])) == ""
+    for bad in (["--system", "a", "--system-file", str(f)], ["--system-file", str(tmp_path / "missing")]):
+        with pytest.raises(SystemExit):
+            resolve_system(parser, parser.parse_args(bad))
+    empty = tmp_path / "e.txt"
+    empty.write_text("  \n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        resolve_system(parser, parser.parse_args(["--system-file", str(empty)]))

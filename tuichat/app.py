@@ -24,6 +24,7 @@ from .text import (MARGIN, SEPARATOR, lex_line, mark_user_lines, strip_user_mark
 from .thinking import ThinkFilter
 
 BOTTOM_PADDING = 2
+MAX_SYSTEM_CHARS = 4000
 THINK_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 ACCENTS = {"ollama": "#00d7ff", "openai": "#10a37f"}
 
@@ -35,8 +36,9 @@ class ChatLexer(Lexer):
 
 
 class ChatApp:
-    def __init__(self, backend: Backend, input=None, output=None, columns=None):
+    def __init__(self, backend: Backend, input=None, output=None, columns=None, system=""):
         self.backend = backend
+        self.system = system.strip()
         self.messages = []
         self.queue = []
         self.streaming = False
@@ -48,6 +50,8 @@ class ChatApp:
         self._columns = columns or (lambda: shutil.get_terminal_size().columns)
 
         welcome = "\nWelcome! Type your message below.\n"
+        if self.system:
+            welcome += f"\n⚙ System prompt set ({len(self.system)} characters). /system shows it.\n"
         warning = backend.preflight()
         if warning:
             welcome += f"\n⚠️  {warning}\n"
@@ -176,6 +180,30 @@ class ChatApp:
             self.set_output("\nConversation cleared.\n\n")
         elif name == "read":
             self._read_files(arg)
+        elif name == "system":
+            self._system_command(arg)
+
+    def _outgoing(self):
+        """What is sent to the model: the system prompt (if any) followed by the conversation."""
+        if not self.system:
+            return self.messages
+        return [{"role": "system", "content": self.system}] + self.messages
+
+    def _system_command(self, arg):
+        if not arg:
+            if self.system:
+                shown = self.system if len(self.system) <= 400 else self.system[:400] + "…"
+                self.append_output(f"\n⚙ System prompt ({len(self.system)} characters):\n{shown}\n\n")
+            else:
+                self.append_output("\n⚙ No system prompt. Set one with: /system You are a ...\n\n")
+        elif arg.lower() == "off":
+            self.system = ""
+            self.append_output("\n✓ System prompt removed (applies from the next message)\n\n")
+        elif len(arg) > MAX_SYSTEM_CHARS:
+            self.append_output(f"\n❌ The system prompt is limited to {MAX_SYSTEM_CHARS} characters\n\n")
+        else:
+            self.system = arg
+            self.append_output(f"\n✓ System prompt set ({len(arg)} characters, applies from the next message)\n\n")
 
     def _read_files(self, raw):
         loaded, errors = load_files(parse_paths(raw))
@@ -234,7 +262,7 @@ class ChatApp:
             self.app.invalidate()
 
         try:
-            async for chunk in self.backend.stream(self.messages):
+            async for chunk in self.backend.stream(self._outgoing()):
                 show(think.feed(chunk))
             show(think.flush())
             self._stop_spinner()
