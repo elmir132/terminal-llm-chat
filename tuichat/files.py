@@ -36,8 +36,11 @@ def load_files(paths):
     return loaded, errors
 
 
+FILE_CONTEXT_PREFIX = "I'm providing you with the contents of "
+
+
 def build_context_message(files) -> str:
     blocks = [f"FILE: {name}\nCONTENT:\n{content}\n[End of {name}]" for name, content in files]
-    return (f"I'm providing you with the contents of {len(files)} file(s). "
+    return (f"{FILE_CONTEXT_PREFIX}{len(files)} file(s). "
             "Please read and understand these files so you can answer questions about them.\n\n"
             + "\n".join(blocks))

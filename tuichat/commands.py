@@ -1,6 +1,6 @@
 """Slash commands typed into the input box."""
 
-KNOWN = {"read", "model", "clear", "system"}
+KNOWN = {"read", "model", "clear", "system", "save", "load", "saves"}
 
 
 def parse_command(text: str):

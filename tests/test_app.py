@@ -6,6 +6,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from tuichat.app import ChatApp
+from tuichat.files import build_context_message
 from tuichat.backends import Backend, BackendError, EchoBackend
 
 
@@ -354,3 +355,110 @@ def test_cli_reads_the_system_prompt_from_text_or_file(tmp_path):
     empty.write_text("  \n", encoding="utf-8")
     with pytest.raises(SystemExit):
         resolve_system(parser, parser.parse_args(["--system-file", str(empty)]))
+
+
+# ---- /save, /load, /saves ---------------------------------------------------------------------------
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("TUICHAT_HOME", str(tmp_path / "home"))
+    return tmp_path / "home"
+
+
+def test_save_then_load_restores_the_conversation_and_the_system_prompt(home):
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["answer one"]), pipe)
+        chat.submit("/system Be brief.")
+        chat.submit("question one")
+        await settle(chat)
+        chat.submit("/save talk")
+        assert "Saved as 'talk' (2 messages)" in chat.output_area.text
+        chat.submit("/clear")
+        chat.submit("/system off")
+        assert chat.messages == [] and chat.system == ""
+        chat.submit("/load talk")
+        return chat
+
+    chat = run(scenario)
+    assert [m["content"] for m in chat.messages] == ["question one", "answer one"]
+    assert chat.system == "Be brief."
+    assert "question one" in chat.output_area.text and "answer one" in chat.output_area.text
+    assert "Loaded 'talk' (2 messages)" in chat.output_area.text
+    assert chat.last_user_msg == "question one" and chat.last_ai_msg == "answer one"
+
+
+def test_a_loaded_conversation_is_sent_to_the_model_with_the_next_question(home):
+    async def scenario(pipe):
+        first = make(ScriptedBackend(["a1"]), pipe)
+        first.submit("q1")
+        await settle(first)
+        first.submit("/save s")
+        backend = ScriptedBackend(["a2"])
+        second = make(backend, pipe)
+        second.submit("/load s")
+        second.submit("q2")
+        await settle(second)
+        return backend
+
+    backend = run(scenario)
+    assert [m["content"] for m in backend.seen[0]] == ["q1", "a1", "q2"]
+
+
+def test_save_refuses_to_overwrite_and_reports_bad_names_and_empty_chats(home):
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["x"]), pipe)
+        chat.submit("/save nothing-yet")
+        chat.submit("hi")
+        await settle(chat)
+        chat.submit("/save keep")
+        chat.submit("/save keep")
+        chat.submit("/save -f keep")
+        chat.submit("/save ../evil")
+        chat.submit("/load missing")
+        chat.submit("/load")
+        return chat
+
+    text = run(scenario).output_area.text
+    assert "nothing to save" in text
+    assert "'keep' already exists" in text
+    assert text.count("Saved as 'keep'") == 2
+    assert "A name can use letters" in text and "No saved conversation called 'missing'" in text
+    assert "Give a name: /load NAME" in text
+
+
+def test_saves_lists_conversations_and_load_waits_for_a_running_reply(home):
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["x"]), pipe)
+        chat.submit("/saves")
+        chat.submit("hi")
+        await settle(chat)
+        chat.submit("/save one")
+        chat.submit("/saves")
+        busy = make(ScriptedBackend(gate=asyncio.Event()), pipe)
+        busy.submit("hello")
+        await asyncio.sleep(0.05)
+        busy.submit("/load one")
+        busy.stop()
+        await settle(busy)
+        return chat, busy
+
+    chat, busy = run(scenario)
+    assert "No saved conversations yet" in chat.output_area.text
+    assert "Saved conversations:\n  one  (2 messages" in chat.output_area.text
+    assert "Wait for the reply to finish" in busy.output_area.text
+
+
+def test_loading_a_conversation_with_loaded_files_shows_a_short_note_not_the_file_text(home):
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["x"]), pipe)
+        chat.messages = [{"role": "user", "content": build_context_message([("a.txt", "SECRET BODY")])},
+                         {"role": "user", "content": "what is in it?"}, {"role": "assistant", "content": "text"}]
+        chat.submit("/save files")
+        other = make(ScriptedBackend(), pipe)
+        other.submit("/load files")
+        return other
+
+    other = run(scenario)
+    assert "files loaded into the conversation" in other.output_area.text
+    assert "SECRET BODY" not in other.output_area.text
+    assert other.last_user_msg == "what is in it?"

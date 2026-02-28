@@ -18,7 +18,8 @@ from prompt_toolkit.widgets import Frame, TextArea
 from .backends import Backend, BackendError
 from .clipboard import copy_to_clipboard
 from .commands import parse_command
-from .files import build_context_message, load_files, parse_paths
+from . import store
+from .files import FILE_CONTEXT_PREFIX, build_context_message, load_files, parse_paths
 from .text import (MARGIN, SEPARATOR, lex_line, mark_user_lines, strip_user_marks,
                    wrap_text, wrap_width)
 from .thinking import ThinkFilter
@@ -47,6 +48,7 @@ class ChatApp:
         self._task = None
         self._spinner = None
         self._base = ""
+        self._frame = ""
         self._columns = columns or (lambda: shutil.get_terminal_size().columns)
 
         welcome = "\nWelcome! Type your message below.\n"
@@ -138,6 +140,11 @@ class ChatApp:
 
     # ---- output helpers ----------------------------------------------
     def append_output(self, text):
+        if self._spinner is not None:
+            # The spinner redraws the screen from `_base`, so a note added meanwhile must go into it.
+            self._base += text
+            self.set_output(self._base + self._frame)
+            return
         self.set_output(self.output_area.text + text)
 
     def set_output(self, text):
@@ -182,6 +189,65 @@ class ChatApp:
             self._read_files(arg)
         elif name == "system":
             self._system_command(arg)
+        elif name == "save":
+            self._save(arg)
+        elif name == "load":
+            self._load(arg)
+        elif name == "saves":
+            self._list_saves()
+
+    def _save(self, arg):
+        overwrite = False
+        if arg.startswith("-f ") or arg == "-f":
+            overwrite, arg = True, arg[2:].strip()
+        name = arg or store.default_name()
+        try:
+            path = store.save(name, self.messages, self.system, self.backend.name, self.backend.model, overwrite)
+        except store.StoreError as exc:
+            self.append_output(f"\n❌ {exc}\n\n")
+            return
+        self.append_output(f"\n✓ Saved as '{name}' ({len(self.messages)} messages) in {path.parent}\n\n")
+
+    def _load(self, name):
+        if not name:
+            self.append_output("\n❌ Give a name: /load NAME (see /saves)\n\n")
+            return
+        if self.streaming:
+            self.append_output("\n❌ Wait for the reply to finish, or press Ctrl+C, before loading\n\n")
+            return
+        try:
+            data = store.load(name)
+        except store.StoreError as exc:
+            self.append_output(f"\n❌ {exc}\n\n")
+            return
+        self.messages = data["messages"]
+        self.system = data["system"]
+        users = [m["content"] for m in self.messages if m["role"] == "user" and not m["content"].startswith(FILE_CONTEXT_PREFIX)]
+        assistants = [m["content"] for m in self.messages if m["role"] == "assistant"]
+        self.last_user_msg = users[-1] if users else ""
+        self.last_ai_msg = assistants[-1] if assistants else ""
+        self.set_output(self._render_history() + f"\n✓ Loaded '{name}' ({len(self.messages)} messages)"
+                        + (f", saved with {data['model']}" if data["model"] else "") + "\n\n")
+
+    def _list_saves(self):
+        rows = store.listing()
+        if not rows:
+            self.append_output(f"\nNo saved conversations yet. /save NAME stores one in {store.folder()}\n\n")
+            return
+        lines = "\n".join(f"  {name}  ({count} messages, {saved[:16].replace('T', ' ')})" for name, saved, count in rows[:30])
+        self.append_output(f"\nSaved conversations:\n{lines}\n\n")
+
+    def _render_history(self):
+        out = "\n"
+        for message in self.messages:
+            if message["role"] == "user" and message["content"].startswith(FILE_CONTEXT_PREFIX):
+                out += "\n📁 (files loaded into the conversation)\n"
+            elif message["role"] == "user":
+                body = mark_user_lines(wrap_text(message["content"], wrap_width(self._columns())))
+                out += f"\n{SEPARATOR}\n👤 You\n{body}\n"
+            else:
+                out += f"\n{self.backend.icon} {self.backend.name}\n{message['content']}\n\n"
+        return out
 
     def _outgoing(self):
         """What is sent to the model: the system prompt (if any) followed by the conversation."""
@@ -314,7 +380,8 @@ class ChatApp:
     async def _spin(self):
         frame = 0
         while True:
-            self.set_output(f"{self._base}{THINK_FRAMES[frame % len(THINK_FRAMES)]} thinking...")
+            self._frame = f"{THINK_FRAMES[frame % len(THINK_FRAMES)]} thinking..."
+            self.set_output(self._base + self._frame)
             self.app.invalidate()
             frame += 1
             await asyncio.sleep(0.1)
