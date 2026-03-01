@@ -19,6 +19,7 @@ from .backends import Backend, BackendError
 from .clipboard import copy_to_clipboard
 from .commands import parse_command
 from . import store
+from .context import DEFAULT_MAX_CHARS, fit_to_budget
 from .files import FILE_CONTEXT_PREFIX, build_context_message, load_files, parse_paths
 from .text import (MARGIN, SEPARATOR, lex_line, mark_user_lines, strip_user_marks,
                    wrap_text, wrap_width)
@@ -37,9 +38,11 @@ class ChatLexer(Lexer):
 
 
 class ChatApp:
-    def __init__(self, backend: Backend, input=None, output=None, columns=None, system=""):
+    def __init__(self, backend: Backend, input=None, output=None, columns=None, system="", max_context=DEFAULT_MAX_CHARS):
         self.backend = backend
         self.system = system.strip()
+        self.max_context = max_context
+        self._noted_dropped = 0
         self.messages = []
         self.queue = []
         self.streaming = False
@@ -184,6 +187,7 @@ class ChatApp:
                 self.append_output(f"\n✓ Model changed to: {arg}\n\n")
         elif name == "clear":
             self.messages.clear()
+            self._noted_dropped = 0
             self.set_output("\nConversation cleared.\n\n")
         elif name == "read":
             self._read_files(arg)
@@ -222,6 +226,7 @@ class ChatApp:
             return
         self.messages = data["messages"]
         self.system = data["system"]
+        self._noted_dropped = 0
         users = [m["content"] for m in self.messages if m["role"] == "user" and not m["content"].startswith(FILE_CONTEXT_PREFIX)]
         assistants = [m["content"] for m in self.messages if m["role"] == "assistant"]
         self.last_user_msg = users[-1] if users else ""
@@ -250,10 +255,20 @@ class ChatApp:
         return out
 
     def _outgoing(self):
-        """What is sent to the model: the system prompt (if any) followed by the conversation."""
+        """What is sent to the model: the system prompt (if any) followed by the conversation, trimmed to the context limit.
+
+        The full conversation stays on screen and in self.messages (so it can be saved and copied)."""
+        messages, dropped, too_big = fit_to_budget(self.messages, self.max_context, len(self.system))
+        if dropped != self._noted_dropped:
+            if dropped:
+                self.append_output(f"\n✂ The oldest {dropped} of {len(self.messages)} messages are left out so the request stays "
+                                   f"under {self.max_context:,} characters. /clear starts fresh.\n")
+            self._noted_dropped = dropped
+        if too_big:
+            self.append_output("\n⚠️  Your latest message alone is longer than the context limit; sending it anyway.\n")
         if not self.system:
-            return self.messages
-        return [{"role": "system", "content": self.system}] + self.messages
+            return messages
+        return [{"role": "system", "content": self.system}] + messages
 
     def _system_command(self, arg):
         if not arg:

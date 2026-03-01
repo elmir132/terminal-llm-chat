@@ -5,6 +5,7 @@ from pathlib import Path
 from . import __version__
 from .app import ChatApp
 from .backends import create_backend
+from .context import DEFAULT_MAX_CHARS
 
 
 def build_parser():
@@ -15,6 +16,8 @@ def build_parser():
     parser.add_argument("--base-url", help="OpenAI-compatible server URL (openai backend only; also OPENAI_BASE_URL)")
     parser.add_argument("--system", help="system prompt: instructions the model gets before the conversation")
     parser.add_argument("--system-file", type=Path, help="read the system prompt from a text file")
+    parser.add_argument("--max-context", type=int, default=DEFAULT_MAX_CHARS, metavar="CHARS",
+                        help=f"leave the oldest messages out of a request above this many characters (default {DEFAULT_MAX_CHARS}; 0 = never)")
     parser.add_argument("--version", action="version", version=f"tuichat {__version__}")
     return parser
 
@@ -40,7 +43,7 @@ def main(argv=None):
     system = resolve_system(parser, args)
     backend = create_backend(args.backend, model=args.model, base_url=args.base_url)
     try:
-        asyncio.run(ChatApp(backend, system=system).run())
+        asyncio.run(ChatApp(backend, system=system, max_context=max(0, args.max_context)).run())
     except KeyboardInterrupt:
         pass
     print("Goodbye! 👋")

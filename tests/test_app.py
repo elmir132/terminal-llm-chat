@@ -462,3 +462,36 @@ def test_loading_a_conversation_with_loaded_files_shows_a_short_note_not_the_fil
     assert "files loaded into the conversation" in other.output_area.text
     assert "SECRET BODY" not in other.output_area.text
     assert other.last_user_msg == "what is in it?"
+
+
+# ---- context limit ---------------------------------------------------------------------------------
+
+def test_old_messages_are_left_out_of_the_request_but_stay_on_screen_and_in_the_history():
+    async def scenario(pipe):
+        backend = ScriptedBackend(["r" * 30])
+        chat = ChatApp(backend, input=pipe, output=DummyOutput(), columns=lambda: 80, max_context=150)
+        for question in ("first " + "a" * 40, "second " + "b" * 40, "third " + "c" * 40):
+            chat.submit(question)
+            await settle(chat)
+        return chat, backend
+
+    chat, backend = run(scenario)
+    assert [m["content"][:5] for m in backend.seen[0]] == ["first"]
+    assert len(backend.seen[1]) == 3                                # still fits on the second turn
+    assert [m["content"][:6] for m in backend.seen[2]] == ["second", "rrrrrr", "third "]       # the first pair is left out
+    assert len(chat.messages) == 6                                  # the full conversation is still kept
+    assert "left out so the request stays under 150 characters" in chat.output_area.text
+    assert "first aaaa" in chat.output_area.text
+
+
+def test_the_notice_is_shown_once_per_change_and_a_limit_of_zero_never_trims():
+    async def scenario(pipe):
+        backend = ScriptedBackend(["r" * 30])
+        chat = ChatApp(backend, input=pipe, output=DummyOutput(), columns=lambda: 80, max_context=0)
+        for n in range(4):
+            chat.submit("q" * 60)
+            await settle(chat)
+        return chat, backend
+
+    chat, backend = run(scenario)
+    assert len(backend.seen[-1]) == 7 and "left out" not in chat.output_area.text
