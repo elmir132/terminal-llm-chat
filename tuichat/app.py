@@ -21,8 +21,8 @@ from .commands import parse_command
 from . import store
 from .context import DEFAULT_MAX_CHARS, fit_to_budget
 from .files import FILE_CONTEXT_PREFIX, build_context_message, load_files, parse_paths
-from .text import (MARGIN, SEPARATOR, lex_line, mark_user_lines, strip_user_marks,
-                   wrap_text, wrap_width)
+from .text import (MARGIN, SEPARATOR, code_line_states, extract_code_blocks, lex_line,
+                   mark_user_lines, strip_user_marks, wrap_text, wrap_width)
 from .thinking import ThinkFilter
 
 BOTTOM_PADDING = 2
@@ -34,7 +34,15 @@ ACCENTS = {"ollama": "#00d7ff", "openai": "#10a37f"}
 class ChatLexer(Lexer):
     def lex_document(self, document):
         lines = document.lines
-        return lambda number: lex_line(lines[number])
+        states = code_line_states(lines)
+
+        def style_line(number):
+            if states[number] == "fence":
+                return [("class:code-fence", lines[number])]
+            if states[number] == "code":
+                return [("class:code", lines[number])]
+            return lex_line(lines[number])
+        return style_line
 
 
 class ChatApp:
@@ -91,6 +99,7 @@ class ChatApp:
             "header": f"{accent} bold", "dim": "#666666", "separator": "#333333",
             "input-frame": "#444444", "frame.border": "#444444", "frame.label": accent,
             "text-area": "#ffffff", "user-msg": "bg:#373737", "bold": "bold #ffffff",
+            "code": "bg:#1e1e1e #e6e6b8", "code-fence": "#666666",
         })
 
     def _build_keys(self):
@@ -130,6 +139,14 @@ class ChatApp:
         @kb.add("c-y")
         def _copy_ai(event):
             self._copy(self.last_ai_msg, "AI response")
+
+        @kb.add("c-k")
+        def _copy_code(event):
+            blocks = extract_code_blocks(self.last_ai_msg)
+            if blocks:
+                self._copy(blocks[-1], "Code block")
+            else:
+                self.append_output("\nNo code block in the last reply\n\n")
 
         @kb.add("c-u")
         def _copy_user(event):

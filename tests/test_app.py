@@ -1,5 +1,6 @@
 """Headless tests of the chat application: no terminal, fake backends."""
 import asyncio
+import types
 
 import pytest
 from prompt_toolkit.input import create_pipe_input
@@ -495,3 +496,48 @@ def test_the_notice_is_shown_once_per_change_and_a_limit_of_zero_never_trims():
 
     chat, backend = run(scenario)
     assert len(backend.seen[-1]) == 7 and "left out" not in chat.output_area.text
+
+
+# ---- code blocks ----------------------------------------------------------------------------------------
+
+def test_the_chat_lexer_styles_fences_and_code_but_not_normal_text():
+    from prompt_toolkit.document import Document
+    from tuichat.app import ChatLexer
+    document = Document("plain **bold**\n```py\nx = **1**\n```\nafter")
+    style = ChatLexer().lex_document(document)
+    assert style(0)[1] == ("class:bold", "bold")
+    assert style(1) == [("class:code-fence", "```py")]
+    assert style(2) == [("class:code", "x = **1**")]            # no bold inside code
+    assert style(3) == [("class:code-fence", "```")]
+    assert style(4) == [("", "after")]
+
+
+def test_ctrl_k_copies_the_last_code_block_of_the_last_reply(monkeypatch):
+    copied = []
+    monkeypatch.setattr("tuichat.app.copy_to_clipboard", lambda text: copied.append(text) or True)
+
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["Try:\n```sh\nls\n```\nor\n```sh\npwd\n```\n"]), pipe)
+        chat.submit("how?")
+        await settle(chat)
+        binding = next(b for b in chat.app.key_bindings.bindings if b.keys and str(b.keys[0]) in ("c-k", "Keys.ControlK"))
+        binding.handler(types.SimpleNamespace(app=chat.app))
+        return chat
+
+    chat = run(scenario)
+    assert copied == ["pwd"]
+    assert "Code block copied to clipboard" in chat.output_area.text
+
+
+def test_ctrl_k_says_so_when_there_is_no_code(monkeypatch):
+    monkeypatch.setattr("tuichat.app.copy_to_clipboard", lambda text: True)
+
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(["just words"]), pipe)
+        chat.submit("hi")
+        await settle(chat)
+        binding = next(b for b in chat.app.key_bindings.bindings if b.keys and str(b.keys[0]) in ("c-k", "Keys.ControlK"))
+        binding.handler(types.SimpleNamespace(app=chat.app))
+        return chat
+
+    assert "No code block in the last reply" in run(scenario).output_area.text

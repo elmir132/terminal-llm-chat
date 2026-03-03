@@ -51,3 +51,39 @@ def lex_line(line: str):
     if last < len(line):
         tokens.append(("", line[last:]))
     return tokens or [("", line)]
+
+
+_FENCE = re.compile(r"^\s*```")
+
+
+def code_line_states(lines):
+    """For each output line: 'fence' (a ``` line), 'code' (inside a fenced block) or None.
+
+    User messages are skipped, and a block that is still open (a reply that is streaming) counts as code to the end."""
+    states, inside = [], False
+    for line in lines:
+        if line.startswith(USER_MARK):
+            states.append(None)
+        elif _FENCE.match(line):
+            states.append("fence")
+            inside = not inside
+        else:
+            states.append("code" if inside else None)
+    return states
+
+
+def extract_code_blocks(text: str):
+    """The contents of every ``` block in a reply, without the fences. An unclosed last block is included."""
+    blocks, current = [], None
+    for line in text.split("\n"):
+        if _FENCE.match(line):
+            if current is None:
+                current = []
+            else:
+                blocks.append("\n".join(current))
+                current = None
+        elif current is not None:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    return blocks

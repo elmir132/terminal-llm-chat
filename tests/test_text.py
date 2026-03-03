@@ -1,4 +1,4 @@
-from tuichat.text import lex_line, mark_user_lines, strip_user_marks, wrap_text, wrap_width
+from tuichat.text import code_line_states, extract_code_blocks, lex_line, mark_user_lines, strip_user_marks, wrap_text, wrap_width
 
 
 def test_wrap_keeps_words_whole_and_blank_lines():
@@ -41,3 +41,31 @@ def test_lex_bold_both_syntaxes():
 
 def test_lex_user_line_ignores_bold_markup():
     assert lex_line("[USER]**not bold**") == [("class:user-msg", "**not bold**")]
+
+
+# ---- fenced code blocks ------------------------------------------------------------------------------
+
+def test_fence_and_code_lines_are_recognised():
+    lines = ["Here:", "```python", "print('x')", "", "```", "done"]
+    assert code_line_states(lines) == [None, "fence", "code", "code", "fence", None]
+
+
+def test_an_open_block_counts_as_code_while_a_reply_is_still_streaming():
+    assert code_line_states(["```", "a = 1"]) == ["fence", "code"]
+
+
+def test_user_lines_never_start_a_code_block():
+    from tuichat.text import USER_MARK
+    assert code_line_states([USER_MARK + "```", "normal text"]) == [None, None]
+
+
+def test_blocks_are_extracted_without_fences_in_order():
+    reply = "one\n```sh\nls -la\ncd ..\n```\ntext\n```\nsecond\n```\nend"
+    assert extract_code_blocks(reply) == ["ls -la\ncd ..", "second"]
+    assert extract_code_blocks("no code here") == []
+    assert extract_code_blocks("```\nunclosed block\nstill code") == ["unclosed block\nstill code"]
+    assert extract_code_blocks("```\n```") == [""]
+
+
+def test_indented_fences_still_count():
+    assert extract_code_blocks("  ```py\n  x = 1\n  ```") == ["  x = 1"]
