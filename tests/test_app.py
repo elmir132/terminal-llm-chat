@@ -541,3 +541,70 @@ def test_ctrl_k_says_so_when_there_is_no_code(monkeypatch):
         return chat
 
     assert "No code block in the last reply" in run(scenario).output_area.text
+
+
+# ---- /help, /models and command-line options -----------------------------------------------------------
+
+class ListingBackend(ScriptedBackend):
+    def __init__(self, names=None, error=None):
+        super().__init__()
+        self.names, self.listing_error = names, error
+
+    async def list_models(self):
+        if self.listing_error:
+            raise self.listing_error
+        return self.names
+
+
+def test_help_lists_commands_and_keys():
+    async def scenario(pipe):
+        chat = make(ScriptedBackend(), pipe)
+        chat.submit("/help")
+        return chat
+
+    text = run(scenario).output_area.text
+    for expected in ("/models", "/save", "/system", "Ctrl+K", "Ctrl+C stop the reply"):
+        assert expected in text
+
+
+def test_models_lists_the_choices_and_marks_the_current_one():
+    async def scenario(pipe):
+        chat = make(ListingBackend(["m", "other"]), pipe)
+        chat.submit("/models")
+        await asyncio.sleep(0.05)
+        return chat
+
+    text = run(scenario).output_area.text
+    assert "Models on scripted:" in text and "  m  (current)" in text and "  other\n" in text
+
+
+def test_models_failure_is_shown_not_raised():
+    async def scenario(pipe):
+        chat = make(ListingBackend(error=BackendError("server down")), pipe)
+        chat.submit("/models")
+        await asyncio.sleep(0.05)
+        chat.backend = ListingBackend(error=RuntimeError("weird"))
+        chat.submit("/models")
+        await asyncio.sleep(0.05)
+        chat.backend = ListingBackend([])
+        chat.submit("/models")
+        await asyncio.sleep(0.05)
+        return chat
+
+    text = run(scenario).output_area.text
+    assert "❌ server down" in text and "Could not list models: weird" in text and "No models found" in text
+
+
+def test_command_line_options_are_checked():
+    import pytest
+    from tuichat.cli import build_parser, check_options
+    parser = build_parser()
+
+    def ok(*argv):
+        check_options(parser, parser.parse_args(list(argv)))
+
+    ok("--timeout", "0", "--temperature", "0", "--num-ctx", "4096")
+    for bad in (["--timeout", "-1"], ["--temperature", "2.5"], ["--temperature", "-0.1"],
+                ["--num-ctx", "100"], ["-b", "openai", "--num-ctx", "4096"]):
+        with pytest.raises(SystemExit):
+            ok(*bad)

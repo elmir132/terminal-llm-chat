@@ -27,6 +27,20 @@ from .thinking import ThinkFilter
 
 BOTTOM_PADDING = 2
 MAX_SYSTEM_CHARS = 4000
+HELP_TEXT = """
+Commands
+  /model [NAME]      show or change the model        /models         list the models you can use
+  /system [TEXT|off] show, set or remove the system prompt
+  /read FILE...      load text files into the conversation
+  /save [-f] [NAME]  save this conversation          /load NAME      load one      /saves  list them
+  /clear             start over (keeps the system prompt)
+  /help              this list
+
+Keys
+  Enter send        Alt+Enter (Esc, Enter) new line      Tab switch input / scroll area
+  Ctrl+C stop the reply (quits when idle)                Ctrl+D quit
+  Ctrl+Y copy last reply   Ctrl+K copy last code block   Ctrl+U copy your last message   Ctrl+A copy the chat
+"""
 THINK_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 ACCENTS = {"ollama": "#00d7ff", "openai": "#10a37f"}
 
@@ -216,6 +230,26 @@ class ChatApp:
             self._load(arg)
         elif name == "saves":
             self._list_saves()
+        elif name == "help":
+            self.append_output(HELP_TEXT)
+        elif name == "models":
+            asyncio.ensure_future(self._list_models())
+
+    async def _list_models(self):
+        try:
+            names = await self.backend.list_models()
+        except BackendError as exc:
+            self.append_output(f"\n❌ {exc}\n\n")
+            return
+        except Exception as exc:
+            self.append_output(f"\n❌ Could not list models: {exc}\n\n")
+            return
+        if not names:
+            self.append_output("\nNo models found.\n\n")
+            return
+        shown = "\n".join(f"  {name}{'  (current)' if name == self.backend.model else ''}" for name in names[:60])
+        more = f"\n  … and {len(names) - 60} more" if len(names) > 60 else ""
+        self.append_output(f"\nModels on {self.backend.name}:\n{shown}{more}\nSwitch with: /model NAME\n\n")
 
     def _save(self, arg):
         overwrite = False
