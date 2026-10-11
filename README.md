@@ -2,6 +2,10 @@
 
 A full-screen terminal chat client for **local models (Ollama)** and **cloud models (OpenAI or any OpenAI-compatible server)**.
 
+![tuichat running with the offline echo backend: two questions and their demo replies](docs/screenshot.png)
+
+*A real session with `tuichat -b echo` (the offline demo backend, no model), captured as text from the terminal, so the colours are not shown. With a real model it looks like this:*
+
 ```text
   🦙 ollama (deepseek-r1:14b) • Local • Private
 ────────────────────────────────────────────────────────────────────────────────
