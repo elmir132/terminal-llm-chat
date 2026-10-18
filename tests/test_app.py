@@ -608,3 +608,26 @@ def test_command_line_options_are_checked():
                 ["--num-ctx", "100"], ["-b", "openai", "--num-ctx", "4096"]):
         with pytest.raises(SystemExit):
             ok(*bad)
+
+
+def test_clear_while_streaming_stops_the_reply_drops_the_queue_and_leaves_nothing_behind():
+    async def scenario(pipe):
+        chat = make(SlowBackend(), pipe)
+        chat.submit("first")
+        await asyncio.sleep(0.05)
+        chat.submit("second")
+        assert "part one" in chat.output_area.text
+        chat.submit("/clear")
+        await settle(chat)
+        assert chat.messages == [] and chat.queue == [] and not chat.streaming
+        assert "part one" not in chat.output_area.text
+        assert "Conversation cleared" in chat.output_area.text
+        chat.backend = ScriptedBackend(["fresh"])
+        chat.submit("again")
+        await settle(chat)
+        return chat
+
+    chat = run(scenario)
+    assert [m["content"] for m in chat.messages] == ["again", "fresh"]
+    assert [m["content"] for m in chat.backend.seen[0]] == ["again"]
+    assert "never shown" not in chat.output_area.text and not chat.streaming

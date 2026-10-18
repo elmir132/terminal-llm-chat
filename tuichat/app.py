@@ -71,6 +71,7 @@ class ChatApp:
         self.last_user_msg = ""
         self.last_ai_msg = ""
         self._task = None
+        self._clear_pending = False
         self._spinner = None
         self._base = ""
         self._frame = ""
@@ -217,9 +218,11 @@ class ChatApp:
                 self.backend.model = arg
                 self.append_output(f"\n✓ Model changed to: {arg}\n\n")
         elif name == "clear":
-            self.messages.clear()
-            self._noted_dropped = 0
-            self.set_output("\nConversation cleared.\n\n")
+            if self.stop():
+                # The cancelled turn may still append its partial reply; _drain clears once it has finished.
+                self._clear_pending = True
+            else:
+                self._clear()
         elif name == "read":
             self._read_files(arg)
         elif name == "system":
@@ -234,6 +237,11 @@ class ChatApp:
             self.append_output(HELP_TEXT)
         elif name == "models":
             asyncio.ensure_future(self._list_models())
+
+    def _clear(self):
+        self.messages.clear()
+        self._noted_dropped = 0
+        self.set_output("\nConversation cleared.\n\n")
 
     async def _list_models(self):
         try:
@@ -368,6 +376,9 @@ class ChatApp:
                 await self._turn(self.queue.pop(0))
         finally:
             self.streaming = False
+            if self._clear_pending:
+                self._clear_pending = False
+                self._clear()
 
     async def _turn(self, user_text):
         self.last_user_msg = user_text
